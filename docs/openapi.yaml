@@ -1,0 +1,341 @@
+openapi: 3.1.0
+
+info:
+  title: 横浜関内社労士オフィス API
+  version: 1.0.0
+  license:
+    name: All rights reserved
+    identifier: LicenseRef-Proprietary
+  description: |
+    横浜関内社労士オフィスの問い合わせ送信とヘルスチェックを提供するAPI。
+    問い合わせ内容は永続化せず、検証後にGmail SMTPで事務所への通知メールと
+    問い合わせ者への受付メールを送信する。
+    問い合わせ処理の監査ログは保持せず、アプリケーションログには問い合わせの
+    入力値とTurnstileトークンを記録しない。
+
+servers:
+  - url: https://yokohama-kannai-sr.com
+    description: Production
+
+security: []
+
+tags:
+  - name: Health
+    description: アプリケーションの稼働確認
+  - name: Contact
+    description: 問い合わせフォームの受付
+
+paths:
+  /200:
+    get:
+      tags:
+        - Health
+      operationId: getHealth
+      summary: アプリケーションの稼働確認
+      security: []
+      description: |
+        HonoプロセスがHTTPリクエストへ応答できることを確認する。
+        外部サービスへの接続確認は行わない。
+      responses:
+        "200":
+          description: アプリケーションは稼働中
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              examples:
+                ok:
+                  value:
+                    status: ok
+  /api/contact:
+    post:
+      tags:
+        - Contact
+      operationId: submitContact
+      summary: 問い合わせを送信
+      security: []
+      description: |
+        入力値とCloudflare Turnstileトークンを検証し、問い合わせ内容を
+        Gmail SMTP経由で事務所へ送信する。その後、問い合わせ者のメールアドレスへ
+        受付メールを送信する。両方のメールがSMTPサーバーに受理された場合だけ
+        成功レスポンスを返す。問い合わせ内容はDBへ保存しない。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactRequest"
+            examples:
+              consulting:
+                value:
+                  company: 株式会社サンプル
+                  name: 山田 太郎
+                  email: contact@example.com
+                  phone: 045-000-0000
+                  category: 労務管理相談
+                  message: 就業規則の見直しについて相談を希望します。
+                  privacy: true
+                  turnstileToken: 0.ABCDEFG
+      responses:
+        "200":
+          description: 事務所通知メールと問い合わせ者向け受付メールの送信が完了
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactSuccessResponse"
+        "400":
+          description: JSONまたは入力値が不正
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Cloudflare Turnstileの検証に失敗
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                error:
+                  code: TURNSTILE_FAILED
+                  message: セキュリティ確認に失敗しました。もう一度お試しください。
+        "415":
+          description: Content-Typeがapplication/jsonではない
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: リクエストボディが許容サイズを超過
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: 送信回数が制限を超過
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            Retry-After:
+              description: 再試行までの秒数
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "405":
+          description: POST以外のHTTPメソッド
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            Allow:
+              description: 許可されているHTTPメソッド
+              schema:
+                type: string
+                const: POST
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Turnstile検証またはいずれかのメール送信が一時的に利用不可
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            Retry-After:
+              description: 再試行までの秒数
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: 予期しないサーバーエラー
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  headers:
+    CacheControl:
+      description: 個人情報を含む応答のキャッシュを禁止
+      schema:
+        type: string
+        const: no-store
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          const: ok
+
+    ContactRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - email
+        - category
+        - message
+        - privacy
+        - turnstileToken
+      properties:
+        company:
+          type: string
+          maxLength: 100
+          pattern: '^[^\r\n]*$'
+          description: 会社名。未入力時はプロパティを送信しない。
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '^[^\r\n]+$'
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        phone:
+          type: string
+          minLength: 7
+          maxLength: 30
+          pattern: '^[0-9０-９+＋()（）\-ー―−\s]+$'
+          description: 電話番号。未入力時はプロパティを送信しない。
+        category:
+          type: string
+          enum:
+            - 労働社会保険手続き
+            - 労務管理相談
+            - 就業規則
+            - 行政調査対応
+            - 助成金
+            - その他
+        message:
+          type: string
+          minLength: 10
+          maxLength: 2000
+        privacy:
+          type: boolean
+          const: true
+          description: 個人情報保護方針への同意
+        turnstileToken:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: Cloudflare Turnstileが発行した一回限りの検証トークン
+
+    ContactSuccessResponse:
+      type: object
+      additionalProperties: false
+      description: 事務所通知と問い合わせ者向け受付メールの両方がSMTPサーバーに受理された状態
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          const: true
+
+    Error:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_REQUEST
+            - TURNSTILE_FAILED
+            - TURNSTILE_UNAVAILABLE
+            - UNSUPPORTED_MEDIA_TYPE
+            - PAYLOAD_TOO_LARGE
+            - RATE_LIMITED
+            - MAIL_DELIVERY_UNAVAILABLE
+            - METHOD_NOT_ALLOWED
+            - NOT_FOUND
+            - INTERNAL_ERROR
+        message:
+          type: string
+          minLength: 1
+
+    FieldError:
+      type: object
+      additionalProperties: false
+      required:
+        - field
+        - code
+        - message
+      properties:
+        field:
+          type: string
+          enum:
+            - company
+            - name
+            - email
+            - phone
+            - category
+            - message
+            - privacy
+            - turnstileToken
+            - body
+        code:
+          type: string
+          enum:
+            - required
+            - invalid
+            - too_short
+            - too_long
+            - unrecognized_key
+        message:
+          type: string
+          minLength: 1
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - success
+        - error
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          $ref: "#/components/schemas/Error"
+        fieldErrors:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/FieldError"

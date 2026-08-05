@@ -1,0 +1,28 @@
+.error-main {
+  display: grid;
+  min-height: calc(100svh - var(--header-height));
+  place-items: center;
+  padding: 72px 24px 96px;
+  background: var(--paper);
+  text-align: center;
+}
+
+.error-content {
+  width: min(100%, 680px);
+}
+
+.error-code {
+  margin: 0 0 12px;
+  color: var(--green);
+  font: 400 clamp(76px, 12vw, 132px)/1 Georgia, "Times New Roman", serif;
+}
+
+.error-content h1 {
+  margin-bottom: 18px;
+  font-size: clamp(28px, 4vw, 42px);
+}
+
+.error-content > p:not(.error-code) {
+  margin: 0 0 32px;
+  color: var(--ink-soft);
+}

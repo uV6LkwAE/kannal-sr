@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+
+# TypeScriptをJavaScriptへ変換するステージ
+FROM node:24-alpine AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
+
+# 本番用ライブラリだけを準備するステージ
+FROM node:24-alpine AS production-dependencies
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+# 完成したアプリケーションを実行する最終ステージ
+FROM node:24-alpine AS runtime
+
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=3000 \
+    STATIC_ROOT=/app/public
+
+WORKDIR /app
+
+COPY --from=production-dependencies /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY package.json ./
+
+COPY --chown=node:node public ./public
+
+USER node
+
+EXPOSE 3000
+
+CMD ["node", "dist/index.js"]
