@@ -1,3 +1,4 @@
+// ルーティングとミドルウェア設定をまとめている
 import { resolve } from "node:path"
 import { serveStatic } from "@hono/node-server/serve-static"
 import { Hono } from "hono"
@@ -18,8 +19,6 @@ declare module "hono" {
   }
 }
 
-const staticRoot = resolve(process.env.STATIC_ROOT ?? "public")
-
 export type AppDependencies = {
   turnstileSiteKey: string
   turnstileVerifier: TurnstileVerifier
@@ -27,8 +26,39 @@ export type AppDependencies = {
   rateLimiter: ContactRateLimiter
 }
 
-export function createApp(dependencies: AppDependencies) {
+export type AppSettings = {
+  staticRoot: string
+}
+
+export function createApp(dependencies: AppDependencies, settings: AppSettings) {
   const app = new Hono()
+  const staticRoot = resolve(settings.staticRoot)
+
+  app.use("*", async (c, next) => {
+    await next()
+    c.header(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "script-src 'self' https://challenges.cloudflare.com",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self' https://challenges.cloudflare.com",
+        "frame-src https://challenges.cloudflare.com https://www.google.com https://maps.google.com",
+      ].join("; "),
+    )
+    c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    c.header("Cross-Origin-Opener-Policy", "same-origin")
+    c.header("Cross-Origin-Resource-Policy", "same-origin")
+    c.header("X-Content-Type-Options", "nosniff")
+    c.header("Referrer-Policy", "strict-origin-when-cross-origin")
+    c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+  })
 
   app.use(
     "*",
@@ -37,12 +67,7 @@ export function createApp(dependencies: AppDependencies) {
     )),
   )
 
-  app.get("/200", (c) => {
-    c.header("Cache-Control", "no-store")
-    return c.json({ status: "ok" })
-  })
   app.get("/healthz", (c) => c.json({ status: "ok" }))
-  app.get("/readyz", (c) => c.json({ status: "ready" }))
 
   app.route("/api", createApiRoutes(dependencies))
   app.route("/", createPageRoutes(dependencies.turnstileSiteKey))

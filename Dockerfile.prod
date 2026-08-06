@@ -23,10 +23,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 # 完成したアプリケーションを実行する最終ステージ
 FROM node:24-alpine AS runtime
 
-ENV NODE_ENV=production \
-    HOST=0.0.0.0 \
-    PORT=3000 \
-    STATIC_ROOT=/app/public
+ENV NODE_ENV=production
 
 WORKDIR /app
 

@@ -1,3 +1,5 @@
+// 設定を読み、依存を作って、サーバーを建てる
+// loadAppConfigを呼び、直接envは見に行かない
 import { serve } from "@hono/node-server"
 import { createApp } from "./app.js"
 import { loadAppConfig } from "./config/env.js"
@@ -5,20 +7,20 @@ import { GmailContactMailer } from "./services/mailer.js"
 import { MemoryContactRateLimiter } from "./services/rate-limit.js"
 import { CloudflareTurnstileVerifier } from "./services/turnstile.js"
 
-const host = process.env.HOST ?? "0.0.0.0"
-const port = Number(process.env.PORT ?? "3000")
 const config = loadAppConfig(process.env)
 const app = createApp({
   turnstileSiteKey: config.turnstile.siteKey,
   turnstileVerifier: new CloudflareTurnstileVerifier(config.turnstile),
   contactMailer: new GmailContactMailer(config.mail),
   rateLimiter: new MemoryContactRateLimiter(),
+}, {
+  staticRoot: config.server.staticRoot,
 })
 
 const server = serve({
   fetch: app.fetch,
-  hostname: host,
-  port
+  hostname: config.server.host,
+  port: config.server.port,
 })
 
 const shutdown = (signal: NodeJS.Signals) => {

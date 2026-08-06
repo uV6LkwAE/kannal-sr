@@ -2,10 +2,7 @@
 
 FROM node:24-alpine
 
-ENV NODE_ENV=development \
-    HOST=0.0.0.0 \
-    PORT=3000 \
-    STATIC_ROOT=/app/public
+ENV NODE_ENV=development
 
 WORKDIR /app
 

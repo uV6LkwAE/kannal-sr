@@ -15,7 +15,6 @@ export type PageMetadata = {
   canonical?: string
   styles: string[]
   social?: SocialMetadata
-  jsonLd?: object
   skipLink?: boolean
 }
 
@@ -40,58 +39,6 @@ export const homeMetadata: PageMetadata = {
     twitterImageAlt: "横浜港の帆船と横浜関内社労士オフィス",
     url: `${siteUrl}/`,
   },
-  jsonLd: {
-    "@context": "https://schema.org",
-    "@graph": [
-      {
-        "@type": "WebSite",
-        "@id": `${siteUrl}/#website`,
-        url: `${siteUrl}/`,
-        name: "横浜関内社労士オフィス",
-        inLanguage: "ja-JP",
-        publisher: { "@id": `${siteUrl}/#organization` },
-      },
-      {
-        "@type": ["ProfessionalService", "LocalBusiness"],
-        "@id": `${siteUrl}/#organization`,
-        url: `${siteUrl}/`,
-        name: "横浜関内社労士オフィス",
-        description:
-          "横浜・桜木町を拠点に、労働社会保険手続き、労務管理相談、就業規則、行政調査対応を行う社会保険労務士事務所です。",
-        image: `${siteUrl}/assets/og-image.jpg`,
-        logo: `${siteUrl}/assets/site-logo.png`,
-        telephone: "+81-90-3232-3649",
-        foundingDate: "1999-07",
-        address: {
-          "@type": "PostalAddress",
-          postalCode: "231-0062",
-          addressCountry: "JP",
-          addressRegion: "神奈川県",
-          addressLocality: "横浜市中区",
-          streetAddress: "桜木町1丁目101番地1 クロスゲート7階",
-        },
-        areaServed: { "@type": "AdministrativeArea", name: "神奈川県" },
-        knowsAbout: ["労働社会保険手続き", "労務管理相談", "就業規則", "行政調査対応"],
-      },
-      {
-        "@type": "WebPage",
-        "@id": `${siteUrl}/#webpage`,
-        url: `${siteUrl}/`,
-        name: homeTitle,
-        description:
-          "横浜・桜木町の社会保険労務士。労働社会保険の手続き、労務管理相談、就業規則、行政調査対応まで支援します。",
-        inLanguage: "ja-JP",
-        isPartOf: { "@id": `${siteUrl}/#website` },
-        about: { "@id": `${siteUrl}/#organization` },
-        primaryImageOfPage: {
-          "@type": "ImageObject",
-          url: `${siteUrl}/assets/og-image.jpg`,
-          width: 1200,
-          height: 630,
-        },
-      },
-    ],
-  },
 }
 
 const privacyTitle = "個人情報保護方針 | 横浜関内社労士オフィス"
@@ -108,17 +55,6 @@ export const privacyMetadata: PageMetadata = {
   social: {
     description: privacyDescription,
     url: `${siteUrl}/privacy`,
-  },
-  jsonLd: {
-    "@context": "https://schema.org",
-    "@type": "WebPage",
-    "@id": `${siteUrl}/privacy#webpage`,
-    url: `${siteUrl}/privacy`,
-    name: privacyTitle,
-    description: privacyDescription,
-    inLanguage: "ja-JP",
-    isPartOf: { "@id": `${siteUrl}/#website` },
-    about: { "@id": `${siteUrl}/#organization` },
   },
 }
 

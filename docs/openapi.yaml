@@ -26,7 +26,7 @@ tags:
     description: 問い合わせフォームの受付
 
 paths:
-  /200:
+  /healthz:
     get:
       tags:
         - Health
@@ -39,9 +39,6 @@ paths:
       responses:
         "200":
           description: アプリケーションは稼働中
-          headers:
-            Cache-Control:
-              $ref: "#/components/headers/CacheControl"
           content:
             application/json:
               schema:

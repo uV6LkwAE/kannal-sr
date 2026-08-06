@@ -16,7 +16,6 @@ export function SiteLayout({
   canonical,
   styles,
   social,
-  jsonLd,
   skipLink,
 }: SiteLayoutProps) {
   return (
@@ -59,12 +58,6 @@ export function SiteLayout({
           href="/assets/favicon-options/favicon-01-32.png"
         />
         {styles.map((href) => <link rel="stylesheet" href={href} />)}
-        {jsonLd && (
-          <script
-            type="application/ld+json"
-            dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-          />
-        )}
         {page === "home" && (
           <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" defer></script>
         )}

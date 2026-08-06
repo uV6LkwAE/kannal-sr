@@ -1,11 +1,11 @@
 import { bodyLimit } from "hono/body-limit"
 import { Hono } from "hono"
-import type { ZodIssue } from "zod"
 import { contactRequestSchema } from "../contact/schema.js"
 import type { ContactMailer, ContactRateLimiter, TurnstileVerifier } from "../contact/types.js"
 
 const maxBodySize = 16 * 1024
 
+// createApiRoutes()の中で以下のオブジェクトを渡すため、型を定義しておく
 type ApiDependencies = {
   turnstileVerifier: TurnstileVerifier
   contactMailer: ContactMailer
@@ -54,7 +54,13 @@ const fieldMessage = (field: string) => {
   return "入力内容を確認してください。"
 }
 
-const issueCode = (issue: ZodIssue) => {
+type ValidationIssue = {
+  code: string
+  input?: unknown
+  path: PropertyKey[]
+}
+
+const issueCode = (issue: ValidationIssue) => {
   if (issue.code === "invalid_type" && issue.input === undefined) return "required" as const
   if (issue.code === "too_small") return "too_short" as const
   if (issue.code === "too_big") return "too_long" as const
@@ -62,7 +68,7 @@ const issueCode = (issue: ZodIssue) => {
   return "invalid" as const
 }
 
-const toFieldErrors = (issues: ZodIssue[]) =>
+const toFieldErrors = (issues: ValidationIssue[]) =>
   issues.slice(0, 20).map((issue) => {
     const candidate = String(issue.path[0] ?? "body")
     const field = fieldNames.has(candidate) ? candidate : "body"
@@ -82,6 +88,7 @@ const failure = (code: ErrorCode, fieldErrors?: ReturnType<typeof toFieldErrors>
 export function createApiRoutes(dependencies: ApiDependencies) {
   const api = new Hono()
 
+  // cはHonoが各リクエストごとに渡してくるコンテキスト
   api.use("*", async (c, next) => {
     await next()
     c.header("Cache-Control", "no-store")
@@ -94,11 +101,13 @@ export function createApiRoutes(dependencies: ApiDependencies) {
       onError: (c) => c.json(failure("PAYLOAD_TOO_LARGE"), 413),
     }),
     async (c) => {
+      // リクエスト形式を確認する
       const contentType = c.req.header("content-type")?.split(";", 1)[0]?.trim().toLowerCase()
       if (contentType !== "application/json") {
         return c.json(failure("UNSUPPORTED_MEDIA_TYPE"), 415)
       }
 
+      // 送信回数を制限する
       const clientKey = (c.req.header("cf-connecting-ip") ?? "unknown").slice(0, 64)
       const rateLimit = dependencies.rateLimiter.consume(clientKey)
       if (!rateLimit.allowed) {
@@ -106,6 +115,7 @@ export function createApiRoutes(dependencies: ApiDependencies) {
         return c.json(failure("RATE_LIMITED"), 429)
       }
 
+      // JSON本文を読み込む
       let body: unknown
       try {
         body = await c.req.json()
@@ -117,22 +127,27 @@ export function createApiRoutes(dependencies: ApiDependencies) {
         }]), 400)
       }
 
+      // スキーマで入力を検証する
       const validation = contactRequestSchema.safeParse(body)
       if (!validation.success) {
         return c.json(failure("INVALID_REQUEST", toFieldErrors(validation.error.issues)), 400)
       }
 
+      // Turnstileを検証する
       const turnstile = await dependencies.turnstileVerifier.verify(
         validation.data.turnstileToken,
         c.req.header("cf-connecting-ip"),
       )
 
+      // Turnstile検証結果が不正
       if (turnstile === "invalid") return c.json(failure("TURNSTILE_FAILED"), 403)
+      // Turnstileの判定に失敗
       if (turnstile === "unavailable") {
         c.header("Retry-After", "60")
         return c.json(failure("TURNSTILE_UNAVAILABLE"), 503)
       }
 
+      // 問い合わせメールを送信する
       try {
         await dependencies.contactMailer.send(validation.data)
       } catch {
@@ -140,6 +155,7 @@ export function createApiRoutes(dependencies: ApiDependencies) {
         return c.json(failure("MAIL_DELIVERY_UNAVAILABLE"), 503)
       }
 
+      // 成功レスポンスを返す
       return c.json({ success: true as const }, 200)
     },
   )
@@ -151,7 +167,6 @@ export function createApiRoutes(dependencies: ApiDependencies) {
 
   api.all("/*", (c) => c.json(failure("NOT_FOUND"), 404))
   api.onError((_error, c) => c.json(failure("INTERNAL_ERROR"), 500))
-  api.notFound((c) => c.json(failure("NOT_FOUND"), 404))
 
   return api
 }

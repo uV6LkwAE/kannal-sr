@@ -1,0 +1,186 @@
+name: deploy
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    env:
+      IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME }}
+      CONTAINER_NAME: ${{ vars.DOCKER_CONTAINER_NAME }}
+      HEALTHCHECK_URL: ${{ vars.APP_HEALTHCHECK_URL }}
+      HOST: ${{ vars.HOST }}
+      PORT: ${{ vars.PORT }}
+      STATIC_ROOT: ${{ vars.STATIC_ROOT }}
+      TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
+      TURNSTILE_EXPECTED_HOSTNAME: ${{ vars.TURNSTILE_EXPECTED_HOSTNAME }}
+      TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+      CONTACT_TO_EMAIL: ${{ secrets.CONTACT_TO_EMAIL }}
+    steps:
+      - name: ソースを取得する
+        uses: actions/checkout@v4
+
+      - name: Node.js を準備する
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 必要な値を確認する
+        run: |
+          set -euo pipefail
+
+          # Secret / Variable の取り忘れをここで止める
+          required_keys=(
+            IMAGE_NAME
+            CONTAINER_NAME
+            HEALTHCHECK_URL
+            HOST
+            PORT
+            STATIC_ROOT
+            TURNSTILE_SITE_KEY
+            TURNSTILE_EXPECTED_HOSTNAME
+            TURNSTILE_SECRET_KEY
+            SMTP_USER
+            SMTP_APP_PASSWORD
+            CONTACT_TO_EMAIL
+          )
+
+          missing_keys=()
+          for key in "${required_keys[@]}"; do
+            if [ -z "${!key:-}" ]; then
+              missing_keys+=("${key}")
+            fi
+          done
+
+          if [ "${#missing_keys[@]}" -ne 0 ]; then
+            printf 'missing required values: %s\n' "${missing_keys[*]}"
+            exit 1
+          fi
+
+      - name: 依存関係をインストールする
+        run: npm ci
+
+      - name: 静的解析する
+        run: npm run lint
+
+      - name: 型チェックする
+        run: npm run typecheck
+
+      - name: テストする
+        run: npm test
+
+      - name: ビルドする
+        run: npm run build
+
+      - name: イメージをビルドする
+        run: |
+          set -euo pipefail
+
+          # 本番用イメージをローカルホスト上で作成する
+          echo "## Docker image build"
+          docker build -f Dockerfile.prod -t "${IMAGE_NAME}:${GITHUB_SHA}" .
+
+      - name: 既存コンテナを停止する
+        run: |
+          set -euo pipefail
+
+          # 先に旧コンテナを止めて、同じポートで新コンテナを起動できるようにする
+          echo "## Stop old container"
+          if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+            if [ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}")" = "true" ]; then
+              docker stop "${CONTAINER_NAME}"
+            else
+              echo "container already stopped: ${CONTAINER_NAME}"
+            fi
+          else
+            echo "no existing container: ${CONTAINER_NAME}"
+          fi
+
+      - name: 既存コンテナを削除する
+        run: |
+          set -euo pipefail
+
+          # 固定名を空けて、新しいコンテナに切り替える
+          echo "## Remove old container"
+          if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+            docker rm "${CONTAINER_NAME}"
+          else
+            echo "no container to remove: ${CONTAINER_NAME}"
+          fi
+
+      - name: 新しいコンテナを起動する
+        run: |
+          set -euo pipefail
+
+          # GitHub Secrets / Variables をそのまま docker run の引数へ渡す
+          echo "## Docker run"
+          docker run -d \
+            --name "${CONTAINER_NAME}" \
+            --restart unless-stopped \
+            -p "127.0.0.1:${PORT}:${PORT}" \
+            -e HOST="${HOST}" \
+            -e PORT="${PORT}" \
+            -e STATIC_ROOT="${STATIC_ROOT}" \
+            -e TURNSTILE_SITE_KEY="${TURNSTILE_SITE_KEY}" \
+            -e TURNSTILE_EXPECTED_HOSTNAME="${TURNSTILE_EXPECTED_HOSTNAME}" \
+            -e TURNSTILE_SECRET_KEY="${TURNSTILE_SECRET_KEY}" \
+            -e SMTP_USER="${SMTP_USER}" \
+            -e SMTP_APP_PASSWORD="${SMTP_APP_PASSWORD}" \
+            -e CONTACT_TO_EMAIL="${CONTACT_TO_EMAIL}" \
+            "${IMAGE_NAME}:${GITHUB_SHA}"
+
+      - name: ヘルスチェックする
+        run: |
+          set -euo pipefail
+
+          # 起動直後の疎通を確認する
+          echo "## Smoke test"
+          node --input-type=module <<'EOF'
+          const url = process.env.HEALTHCHECK_URL
+          if (!url) {
+            throw new Error("HEALTHCHECK_URL is required")
+          }
+
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+          for (let attempt = 1; attempt <= 15; attempt += 1) {
+            try {
+              const response = await fetch(url)
+              if (response.ok) {
+                process.exit(0)
+              }
+            } catch {
+              // retry
+            }
+
+            if (attempt < 15) {
+              await sleep(2000)
+            }
+          }
+
+          throw new Error(`healthcheck failed: ${url}`)
+          EOF
+
+      - name: 失敗時にログを出す
+        if: failure()
+        run: |
+          set -euo pipefail
+
+          # 失敗時に原因を追いやすいよう、コンテナログを出力する
+          if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+            docker logs "${CONTAINER_NAME}" || true
+          fi

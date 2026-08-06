@@ -1,8 +1,16 @@
+// NODEJS.ProcessEnvを受け取り、このアプリ用の設定オブジェクトに変換する
+// Zodでバリデーションもしている
+// process.envにはOSから渡された環境変数が入っている
+// 環境変数をどう解釈するかの責務
 import { z } from "zod"
 
 const email = z.string().trim().pipe(z.email().max(254))
+const port = z.coerce.number().int().min(1).max(65535)
 
 const envSchema = z.object({
+  HOST: z.string().trim().min(1),
+  PORT: port,
+  STATIC_ROOT: z.string().trim().min(1),
   TURNSTILE_SITE_KEY: z.string().trim().min(1),
   TURNSTILE_SECRET_KEY: z.string().trim().min(1),
   TURNSTILE_EXPECTED_HOSTNAME: z.string().trim().min(1),
@@ -12,6 +20,11 @@ const envSchema = z.object({
 })
 
 export type AppConfig = {
+  server: {
+    host: string
+    port: number
+    staticRoot: string
+  }
   turnstile: {
     siteKey: string
     secretKey: string
@@ -45,6 +58,11 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
   }
 
   return {
+    server: {
+      host: result.data.HOST,
+      port: result.data.PORT,
+      staticRoot: result.data.STATIC_ROOT,
+    },
     turnstile: {
       siteKey: result.data.TURNSTILE_SITE_KEY,
       secretKey: result.data.TURNSTILE_SECRET_KEY,

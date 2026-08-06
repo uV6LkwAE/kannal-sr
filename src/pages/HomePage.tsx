@@ -379,7 +379,7 @@ export function HomePage({ turnstileSiteKey }: HomePageProps) {
                   <label class="agreement">
                     <input type="checkbox" name="privacy" required />
                     <span>
-                      <a href="/privacy" target="_blank">個人情報保護方針</a>に同意する
+                      <a href="/privacy" target="_blank" rel="noopener noreferrer">個人情報保護方針</a>に同意する
                       <em>必須</em>
                     </span>
                   </label>

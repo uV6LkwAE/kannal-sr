@@ -2,14 +2,13 @@
 
 ## 1. 目的
 
-横浜関内社労士オフィスのLPサイトと問い合わせAPIを、自宅Ubuntu Server上の既存k3sクラスタで運用する。
+横浜関内社労士オフィスのLPサイトと問い合わせAPIを、自宅Ubuntu Server上のDockerホストで運用する。
 
 小規模なサイトであるため構成は単純に保ちつつ、次の要件を満たす。
 
 - ホストOS上へアプリケーションを直接配置しない
-- 既存サイトとnamespace、Tunnel、Secretを分離する
-- インターネットからk3sノードへポートを直接公開しない
-- NASのprivate container registryを利用する
+- 既存サイトとTunnel、Secretを分離する
+- インターネットからDockerホストへポートを直接公開しない
 - GitHub Actionsから安全かつ容易に更新できるようにする
 - 問い合わせで扱う個人情報を不要に保存、記録しない
 
@@ -68,11 +67,11 @@ Zod schemaを問い合わせデータの定義元とし、`z.infer`でTypeScript
 ### Infrastructure
 
 - Host: 自宅Ubuntu Server
-- Container orchestration: 既存k3sクラスタ
-- Namespace: `kannai-sr`
+- Container runtime: Docker
+- Container orchestration: なし
 - Edge / DNS / TLS: Cloudflare
 - Public access: 専用Cloudflare Tunnel
-- Container registry: 自宅NAS上のprivate registry
+- Container image distribution: GitHub Actionsでホスト上へ直接デプロイ
 - CI/CD: GitHub Actionsのself-hosted runner
 
 ### Build and Container Policy
@@ -98,8 +97,8 @@ Docker Composeは使用しない。
 
 - アプリケーションコンテナはHonoの1種類だけである
 - Databaseなどのローカル依存サービスがない
-- `cloudflared`を含む本番コンテナの管理はk3sが行う
-- ComposeとKubernetesで構成を二重管理しない
+- `cloudflared`は必要に応じてホスト上の別コンテナまたはサービスとして管理する
+- Composeなど別方式で構成を二重管理しない
 
 ホスト側のファイルは役割ごとに分離する。
 
@@ -133,7 +132,9 @@ docker run --rm -it \
 docker build -f Dockerfile.prod -t kannai-sr:prod .
 ```
 
-本番ではDocker Composeや`docker run`を使用しない。CIがイメージをNAS registryへpushし、k3sのcontainer runtimeがDeploymentの指定に従ってpull、実行する。
+本番では`docker run`でコンテナを起動する。CIはイメージをビルドし、デプロイ先ホスト上でそのまま`docker run`を実行して更新する。`docker compose`は使用しない。
+
+Honoコンテナはホストのloopbackにだけ公開し、`cloudflared`はホストサービスとして`http://127.0.0.1:3000`へ転送する。
 
 ## 3. 通信経路
 
@@ -148,65 +149,48 @@ Cloudflare Edge
 Dedicated Cloudflare Tunnel: kannai-sr
   |
   v
-cloudflared Deployment in namespace kannai-sr
+cloudflared on Docker host
   |
-  | http://hono:3000
+  | http://127.0.0.1:3000
   v
-Hono ClusterIP Service
+Hono container
   |
   v
-Ready Hono Pod
+Ready Hono process
 ```
 
-Cloudflare TunnelはPod IDやPod IPを直接指定しない。`cloudflared`からKubernetes ServiceのDNS名 `hono` を参照し、Serviceが正常なHono Podへ転送する。
-
-Podは再作成時にIPが変わるため、転送先にPod IPを使用しない。
+Cloudflare TunnelはIP直指定ではなく、ホスト上の`cloudflared`サービスが`http://127.0.0.1:3000`へ接続する。Honoコンテナはホストのloopbackにだけ公開するため、外部から直接到達できない。
 
 ## 4. 既存サイトとの分離
 
 既存サイトとは以下を分離する。
 
-- Kubernetes namespace
 - Cloudflare Tunnel
 - Tunnel token
-- `cloudflared` Deployment
-- Kubernetes Service
-- Kubernetes Secret
+- `cloudflared` runtime
+- Hono Docker container
+- runtime secret
 - GitHub Actionsのデプロイ権限
 - コンテナイメージ名
 
-CloudflareはKubernetes namespaceを認識しない。専用Tunnelのトークンを持つ`cloudflared`が、同じnamespaceのHono Serviceへ転送することで経路を分離する。
+Cloudflareはアプリケーションの内部構成を認識しない。専用Tunnelのトークンを持つ`cloudflared`が、同じホスト上のHonoコンテナへ転送することで経路を分離する。
 
-## 5. Kubernetesリソース
+## 5. Docker構成
 
-初期構成では以下のリソースを作成する。
+初期構成では以下の構成要素を用意する。
 
 ```text
-namespace/kannai-sr
-deployment/hono
-service/hono
-deployment/cloudflared
-secret/cloudflared-token
-secret/app-secrets
-secret/registry-credentials
-configmap/app-config
-serviceaccount/deployer
-role/deployer
-rolebinding/deployer
+container/hono
 ```
 
-### Hono Deployment
+### Hono container
 
-- 初期replica数は`1`
 - コンテナは`0.0.0.0:3000`でlistenする
-- `RollingUpdate`を使用する
-- `revisionHistoryLimit`を設定する
 - Git SHAをイメージタグに使用する
 - `latest`タグをデプロイに使用しない
 - `SIGTERM`を受けて正常終了できるようにする
-- `/healthz`をliveness probeに使用する
-- `/readyz`をreadiness probeに使用する
-- CPU、メモリのrequestsとlimitsを設定する
+- `/healthz`を起動確認に使用する
+- CPU、メモリの上限はホスト運用に合わせて設定する
 
 初期値の目安:
 
@@ -222,47 +206,55 @@ resources:
 
 実測値を確認して調整する。
 
-### Hono Service
+### cloudflared runtime
 
-- typeは`ClusterIP`
-- Service名は`hono`
-- Service portは`3000`
-- `NodePort`と`LoadBalancer`は使用しない
-- 外部から直接到達できる経路を作らない
-
-### cloudflared Deployment
-
+- ホスト上のサービスとして管理する
 - LP専用Tunnelのトークンを使用する
-- 転送先は`http://hono:3000`
-- 初期replica数は`1`
-- Tunnel tokenはKubernetes Secretから渡す
+- 転送先は`http://127.0.0.1:3000`
+- Tunnel tokenはGitHub Secretまたはホスト上のSecret管理から渡す
 - トークンのローテーション手順を用意する
 
-Honoと`cloudflared`は小規模運用として1 replicaから開始する。必要になった場合は2 replicasへ増やせるが、単一ノードクラスタではノード障害への耐性は得られない。
-
-### Ingress
-
-このサイトでは次を使用しない。
-
-- Traefik Ingress
-- Kubernetes Ingress
-- Nginx reverse proxy
-
-`cloudflared`からHonoのClusterIP Serviceへ直接転送する。
+Honoコンテナと`cloudflared`サービスは小規模運用として1インスタンスから開始する。必要になった場合は冗長化を検討するが、当面は単一ホスト運用でよい。
 
 ## 6. コンテナのセキュリティ
 
-Hono Podと`cloudflared` Podには、可能な範囲で以下を設定する。
+Honoコンテナと`cloudflared`コンテナには、可能な範囲で以下を設定する。
 
 - 非rootユーザーで実行
 - `allowPrivilegeEscalation: false`
 - `readOnlyRootFilesystem: true`
 - Linux capabilitiesをすべてdrop
 - `seccompProfile: RuntimeDefault`
-- 不要なServiceAccount tokenをマウントしない
-- Secretをコンテナイメージへ含めない
 
-NetworkPolicyはk3sで使用しているCNIの対応状況を確認してから導入する。導入する場合は、`cloudflared`からHonoへの通信と、HonoからDNS、Turnstile Siteverify API、Gmail SMTPへの必要な通信のみを許可する。
+### HTTP Security Headers
+
+Webサイト全体の安全性を高めるため、アプリケーションは以下のHTTPセキュリティヘッダーを返す。
+
+必須:
+
+| Header | 値 | 目的 |
+| --- | --- | --- |
+| `Content-Security-Policy` | `default-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://www.google.com https://maps.google.com` | XSS、外部リソース読み込み、埋め込み元を制限する |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | HTTPS固定を強制する |
+| `X-Content-Type-Options` | `nosniff` | MIME sniffingを防ぐ |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | 参照元URLの漏えいを抑える |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | 不要なブラウザ機能の利用を抑える |
+
+追加検討:
+
+| Header | 推奨値 | 補足 |
+| --- | --- | --- |
+| `Cross-Origin-Opener-Policy` | `same-origin` | ウィンドウ分離を強める。外部連携との互換性を確認してから導入する |
+| `Cross-Origin-Resource-Policy` | `same-origin` | 同一オリジン以外からの参照を抑える |
+
+採用しない:
+
+- `X-Frame-Options`
+  - `Content-Security-Policy` の `frame-ancestors 'none'` で代替するため、重複導入しない
+- `Cross-Origin-Embedder-Policy`
+  - 外部スクリプトや埋め込みとの互換性影響が大きいため、現時点では採用しない
+- 不要な秘密情報をコンテナイメージへ含めない
+- ホストの永続ディレクトリへ問い合わせ本文や個人情報を保存しない
 
 ## 7. Cloudflare設定
 
@@ -328,39 +320,38 @@ POST /api/contact
 - 送信元ドメインのSPF、DKIM、DMARCを設定する
 - 個人情報の利用目的と保持方針をprivacyページへ記載する
 
-## 9. Secretと設定値
+## 9. Secretsと設定値
 
-### Kubernetes Secret
+### Secrets
 
-想定する機密情報:
+GitHub Secretsに入れるキー:
 
-- `CLOUDFLARED_TOKEN`
-- `TURNSTILE_SECRET_KEY`
-- `SMTP_USER`
-- `SMTP_APP_PASSWORD`
-- `CONTACT_TO_EMAIL`
-- NAS registryの認証情報
+| Key | ダミー値の例 |
+| --- | --- |
+| `CLOUDFLARED_TOKEN` | `eyJhIjoiZHVtbXktdHVubmVsLXRva2VuIn0=` |
+| `TURNSTILE_SECRET_KEY` | `1x0000000000000000000000000000000AA` |
+| `SMTP_USER` | `sender@example.com` |
+| `SMTP_APP_PASSWORD` | `dummy-app-password-123456` |
+| `CONTACT_TO_EMAIL` | `office@example.com` |
 
-`SMTP_USER`はGmailのログイン識別子、`CONTACT_TO_EMAIL`は問い合わせ内容の送付先であり、サイト上へ公開する必要がないためSecretとして扱う。Secretの実値はGit、コンテナイメージ、Dockerfile、ConfigMapへ保存しない。Secret manifestを管理する場合はキー名のみを記載したexampleファイルにする。
+`SMTP_USER`はGmailのログイン識別子、`CONTACT_TO_EMAIL`は問い合わせ内容の送付先であり、サイト上へ公開する必要がないためSecretとして扱う。Secretの実値はGit、コンテナイメージ、Dockerfileへ保存しない。ローカルで`.env`を使う場合でも本番には持ち込まない。
 
-ローカル開発ではGit管理対象外の`.env`へ保存し、`docker run --env-file .env`でコンテナへ渡す。`.env`はコンテナイメージへコピーしない。本番では`secret/app-secrets`から環境変数としてPodへ渡す。
+ローカル開発ではGit管理対象外の`.env`へ保存し、`docker run --env-file .env`でコンテナへ渡す。`.env`はコンテナイメージへコピーしない。本番ではGitHub Secrets / Variables を workflow 内で展開して、`docker run` の `-e` 引数として渡す。
 
-```yaml
-envFrom:
-  - secretRef:
-      name: app-secrets
-```
+### Variables
 
-### ConfigMap
+GitHub Variablesに入れるキー:
 
-機密ではない設定:
-
-- `APP_ENV`
-- `APP_ORIGIN`
-- `PORT`
-- `STATIC_ROOT`
-- `TURNSTILE_SITE_KEY`
-- `TURNSTILE_EXPECTED_HOSTNAME`
+| Key | ダミー値の例 |
+| --- | --- |
+| `HOST` | `0.0.0.0` |
+| `PORT` | `3000` |
+| `STATIC_ROOT` | `public` |
+| `TURNSTILE_SITE_KEY` | `1x00000000000000000000AA` |
+| `TURNSTILE_EXPECTED_HOSTNAME` | `yokohama-kannai-sr.com` |
+| `DOCKER_IMAGE_NAME` | `ghcr.io/example/kannai-sr` |
+| `DOCKER_CONTAINER_NAME` | `kannai-sr` |
+| `APP_HEALTHCHECK_URL` | `http://127.0.0.1:3000/healthz` |
 
 アプリケーションが現在読み取る環境変数:
 
@@ -378,22 +369,39 @@ envFrom:
 
 SMTP接続先は現在の実装で`smtp.gmail.com:465`、TLS有効に固定する。Googleアカウントの通常パスワードは使用しない。
 
-## 10. NAS Container Registry
+## 10. GitHub Secrets と Variables
 
-- Docker Registry互換のprivate registryを使用する
-- NAS registryはインターネットへ直接公開しない
-- k3sノードとself-hosted runnerからのみ到達可能にする
-- 認証を有効にする
-- 通信経路をTLSで保護する
-- k3sには`imagePullSecret`を設定する
-- 過去の正常なイメージを一定数保持する
-- registryデータをバックアップする
+GitHub Actionsでは、`deploy.yml` で使う値を `Secrets` と `Variables` に分ける。
+本番では `.env.prod` を読み取らず、workflow内で `docker run` の引数として明示的に渡す。
 
-NAS停止中も実行中のPodは継続できるが、新規pullが必要な再起動やデプロイは失敗する可能性がある。そのため、直前の正常イメージを保持し、NASの可用性と復旧手順を確認しておく。
+### Secrets
+
+| Key | ダミー値の例 |
+| --- | --- |
+| `CLOUDFLARED_TOKEN` | `eyJhIjoiZHVtbXktdHVubmVsLXRva2VuIn0=` |
+| `TURNSTILE_SECRET_KEY` | `1x0000000000000000000000000000000AA` |
+| `SMTP_USER` | `sender@example.com` |
+| `SMTP_APP_PASSWORD` | `dummy-app-password-123456` |
+| `CONTACT_TO_EMAIL` | `office@example.com` |
+
+### Variables
+
+| Key | ダミー値の例 |
+| --- | --- |
+| `HOST` | `0.0.0.0` |
+| `PORT` | `3000` |
+| `STATIC_ROOT` | `public` |
+| `TURNSTILE_SITE_KEY` | `1x00000000000000000000AA` |
+| `TURNSTILE_EXPECTED_HOSTNAME` | `yokohama-kannai-sr.com` |
+| `DOCKER_IMAGE_NAME` | `ghcr.io/example/kannai-sr` |
+| `DOCKER_CONTAINER_NAME` | `kannai-sr` |
+| `APP_HEALTHCHECK_URL` | `http://127.0.0.1:3000/healthz` |
+
+`TURNSTILE_SITE_KEY` は公開値だが、workflow から渡しやすいなら `Variables` に置く。`HOST` と `PORT` は運用パラメータなので `Variables` に置く。`STATIC_ROOT` は通常 `public` を指すだけなので `Variables` でよい。`APP_HEALTHCHECK_URL` は `docker run` 後の疎通確認に使うURLで、必要なら `http://127.0.0.1:3000/healthz` のように置く。
 
 ## 11. CI/CD
 
-GitHub Actionsのself-hosted runnerを自宅ネットワーク内に配置する。NAS registryやk3s APIを外部公開しない。
+GitHub Actionsのself-hosted runnerをデプロイ先のDockerホスト上に配置する。外部公開する registry や管理API は使わない。
 
 ```text
 push to main
@@ -404,9 +412,9 @@ push to main
   -> npm run build
   -> container image build
   -> vulnerability scan
-  -> NAS registryへGit SHA tagでpush
-  -> deploymentのimageを更新
-  -> kubectl rollout status
+  -> docker stop 旧コンテナ
+  -> docker rm 旧コンテナ
+  -> docker run 新コンテナ
   -> smoke test
 ```
 
@@ -415,25 +423,23 @@ push to main
 - protectedな`main`ブランチからのみ本番デプロイする
 - forkや信頼できないPull Requestのコードをself-hosted runnerで実行しない
 - runnerをこのrepository専用にする
-- registry資格情報をGitHub Actions Secretsで管理する
-- Kubernetes権限を`kannai-sr` namespaceに限定する
-- Deployment更新とrollout確認に必要な最小権限のみ付与する
+- `docker run` に渡す環境変数は GitHub Secrets / Variables から組み立てる
+- コンテナ名とポートは固定して更新する
 - デプロイの同時実行を防止する
-- 失敗時に直前のGit SHAタグへ戻せるようにする
+- 失敗時に直前のコンテナへ戻せるようにする
+- GitHubモバイルアプリに通知が届くよう、workflowの成功・失敗が一目で分かる構成にする
+- 各フェーズは `name` と `echo` で明示し、失敗時は該当ステップがすぐ分かるようにする
 
-ロールバック例:
+補足:
 
-```sh
-kubectl -n kannai-sr rollout undo deployment/hono
-kubectl -n kannai-sr rollout status deployment/hono
-```
+- GitHubモバイルアプリへの通知は、基本的には workflow / job の完了状態に紐づく
+- 個々のフェーズを別々のプッシュ通知にすることはできないため、ログ上のコメントとチェック結果で見分ける
 
 ## 12. 監視とログ
 
 - 問い合わせの受付履歴、成功、失敗を記録する監査ログは保持しない
 - 問い合わせ本文、会社名、氏名、メールアドレス、電話番号、Turnstileトークンを記録しない
 - メール送信障害を検知して外部通知する仕組みは実装しない
-- `/200`はHonoプロセスがHTTP応答可能か確認するために提供する
 - 起動失敗など、アプリケーション実行に必要な最小限のプロセスエラーは標準エラー出力へ出す
 
 ## 13. バックアップと復旧対象
@@ -443,8 +449,7 @@ kubectl -n kannai-sr rollout status deployment/hono
 バックアップまたは再発行手順が必要なもの:
 
 - Git repository
-- Kubernetes manifests
-- NAS registryデータ
+- deployment workflow
 - Cloudflare Tunnel設定
 - Tunnel token
 - Turnstile secret
@@ -454,18 +459,17 @@ kubectl -n kannai-sr rollout status deployment/hono
 
 ## 14. 実装順序
 
-1. Honoアプリケーションと`/healthz`、`/readyz`を実装する
+1. Honoアプリケーションと`/healthz`を実装する
 2. `Dockerfile.dev`のホットリロードと`Dockerfile.prod`の非root実行を確認する
-3. NAS registryと認証、TLS、バックアップを準備する
-4. `kannai-sr` namespaceとHonoのDeployment、Serviceを作成する
-5. 専用Cloudflare Tunnelと`cloudflared` Deploymentを作成する
-6. 本番hostnameをTunnelへ割り当てる
-7. Turnstile、Nodemailer、Gmail SMTPのSecretとConfigMapを設定する
-8. GitHub Actionsのself-hosted runnerとnamespace限定権限を設定する
-9. CI/CD、rollout確認、ロールバックを検証する
-10. Rate Limiting、監視、バックアップ、障害時手順を確認する
+3. デプロイ先ホストにself-hosted runnerを設定する
+4. 専用Cloudflare Tunnelと`cloudflared`の起動方式を決める
+5. 本番hostnameをTunnelへ割り当てる
+6. Turnstile、Nodemailer、Gmail SMTPのSecretsとVariablesを設定する
+7. `deploy.yml` を実装して、ビルド、起動、ヘルスチェックまで通す
+8. CI/CD、ロールバック、失敗時通知を検証する
+9. Rate Limiting、監視、バックアップ、障害時手順を確認する
 
 ## 15. 未確定事項
 
-- NAS registryの製品または実装方式
-- k3sで使用中のCNIとNetworkPolicy対応状況
+- `cloudflared` をホストサービスにするか別コンテナにするか
+- `deploy.yml` での `docker run` 引数の最終形
