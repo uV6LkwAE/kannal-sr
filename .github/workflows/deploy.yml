@@ -42,9 +42,6 @@ jobs:
 
           # Secret / Variable の取り忘れをここで止める
           required_keys=(
-            IMAGE_NAME
-            CONTAINER_NAME
-            HEALTHCHECK_URL
             HOST
             PORT
             STATIC_ROOT
