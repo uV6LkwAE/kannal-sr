@@ -97,7 +97,7 @@ Docker Composeは使用しない。
 
 - アプリケーションコンテナはHonoの1種類だけである
 - Databaseなどのローカル依存サービスがない
-- `cloudflared`は必要に応じてホスト上の別コンテナまたはサービスとして管理する
+- `cloudflared`はホスト上のサービスとして管理する
 - Composeなど別方式で構成を二重管理しない
 
 ホスト側のファイルは役割ごとに分離する。
@@ -208,7 +208,7 @@ resources:
 
 ### cloudflared runtime
 
-- ホスト上のサービスとして管理する
+- ホストへ直接インストールしたサービスとして管理する
 - LP専用Tunnelのトークンを使用する
 - 転送先は`http://127.0.0.1:3000`
 - Tunnel tokenはGitHub Secretまたはホスト上のSecret管理から渡す
@@ -218,7 +218,7 @@ Honoコンテナと`cloudflared`サービスは小規模運用として1イン�
 
 ## 6. コンテナのセキュリティ
 
-Honoコンテナと`cloudflared`コンテナには、可能な範囲で以下を設定する。
+Honoコンテナと`cloudflared`サービスには、可能な範囲で以下を設定する。
 
 - 非rootユーザーで実行
 - `allowPrivilegeEscalation: false`
@@ -320,84 +320,48 @@ POST /api/contact
 - 送信元ドメインのSPF、DKIM、DMARCを設定する
 - 個人情報の利用目的と保持方針をprivacyページへ記載する
 
-## 9. Secretsと設定値
+## 9. GitHub Secrets と Variables
 
-### Secrets
+GitHub Actionsでは、`deploy.yml` で使う値を必要最小限にする。`deploy.yml` は本番の`.env.prod`を読まず、workflow内で `docker run` の引数として明示的に渡す。
 
-GitHub Secretsに入れるキー:
+### ビルド工程で使うもの
 
-| Key | ダミー値の例 |
-| --- | --- |
-| `CLOUDFLARED_TOKEN` | `eyJhIjoiZHVtbXktdHVubmVsLXRva2VuIn0=` |
-| `TURNSTILE_SECRET_KEY` | `1x0000000000000000000000000000000AA` |
-| `SMTP_USER` | `sender@example.com` |
-| `SMTP_APP_PASSWORD` | `dummy-app-password-123456` |
-| `CONTACT_TO_EMAIL` | `office@example.com` |
+現在はなし。`npm ci`、lint、typecheck、test、build は GitHub Secrets / Variables を必要としない。
 
-`SMTP_USER`はGmailのログイン識別子、`CONTACT_TO_EMAIL`は問い合わせ内容の送付先であり、サイト上へ公開する必要がないためSecretとして扱う。Secretの実値はGit、コンテナイメージ、Dockerfileへ保存しない。ローカルで`.env`を使う場合でも本番には持ち込まない。
+### サービスを動かすのに使うもの
 
-ローカル開発ではGit管理対象外の`.env`へ保存し、`docker run --env-file .env`でコンテナへ渡す。`.env`はコンテナイメージへコピーしない。本番ではGitHub Secrets / Variables を workflow 内で展開して、`docker run` の `-e` 引数として渡す。
+#### GitHub Secrets
 
-### Variables
-
-GitHub Variablesに入れるキー:
-
-| Key | ダミー値の例 |
-| --- | --- |
-| `HOST` | `0.0.0.0` |
-| `PORT` | `3000` |
-| `STATIC_ROOT` | `public` |
-| `TURNSTILE_SITE_KEY` | `1x00000000000000000000AA` |
-| `TURNSTILE_EXPECTED_HOSTNAME` | `yokohama-kannai-sr.com` |
-| `DOCKER_IMAGE_NAME` | `ghcr.io/example/kannai-sr` |
-| `DOCKER_CONTAINER_NAME` | `kannai-sr` |
-| `APP_HEALTHCHECK_URL` | `http://127.0.0.1:3000/healthz` |
-
-アプリケーションが現在読み取る環境変数:
-
-| Key | 機密 | 用途 |
+| Key | ダミー値の例 | 用途 |
 | --- | --- | --- |
-| `TURNSTILE_SITE_KEY` | いいえ | ブラウザへ埋め込むTurnstile公開キー |
-| `TURNSTILE_EXPECTED_HOSTNAME` | いいえ | Siteverify応答で照合する本番hostname |
-| `TURNSTILE_SECRET_KEY` | はい | Siteverify APIの認証 |
-| `SMTP_USER` | はい | Gmail SMTPの認証ユーザー兼固定Fromアドレス |
-| `SMTP_APP_PASSWORD` | はい | Gmailのアプリパスワード |
-| `CONTACT_TO_EMAIL` | はい | 事務所向け通知メールの宛先 |
-| `HOST` | いいえ | listen address。既定値`0.0.0.0` |
-| `PORT` | いいえ | listen port。既定値`3000` |
-| `STATIC_ROOT` | いいえ | 静的ファイルのルート。既定値`public` |
+| `TURNSTILE_SECRET_KEY` | `1x0000000000000000000000000000000AA` | Turnstile Siteverify の認証 |
+| `SMTP_USER` | `sender@example.com` | Gmail SMTP のログイン識別子 |
+| `SMTP_APP_PASSWORD` | `dummy-app-password-123456` | Gmail のアプリパスワード |
+| `CONTACT_TO_EMAIL` | `office@example.com` | 問い合わせ通知の送付先 |
+
+`SMTP_USER` と `CONTACT_TO_EMAIL` はサイト上へ公開する必要がないため Secret として扱う。
+`cloudflared` のトンネルトークンは GitHub Secrets には置かず、ホスト上の systemd unit あるいは root-only の設定ファイルにのみ置く。これは初回セットアップとトークン再発行時だけ使う。
+
+#### GitHub Variables
+
+| Key | ダミー値の例 | 用途 |
+| --- | --- | --- |
+| `STATIC_ROOT` | `public` | 静的ファイルのルート |
+| `TURNSTILE_SITE_KEY` | `1x00000000000000000000AA` | ブラウザへ埋め込む Turnstile 公開キー |
+| `TURNSTILE_EXPECTED_HOSTNAME` | `yokohama-kannai-sr.com` | Siteverify 応答で照合する本番 hostname |
+
+`STATIC_ROOT` は通常 `public` を指すだけなので Variables でよい。`TURNSTILE_SITE_KEY` と `TURNSTILE_EXPECTED_HOSTNAME` は公開値だが、workflow から渡しやすいなら Variables に置く。
+
+### 混合
+
+| Key | ダミー値の例 | 用途 |
+| --- | --- | --- |
+| `HOST` | `0.0.0.0` | アプリの listen address と `docker run` への渡し先 |
+| `PORT` | `3000` | アプリの listen port と `docker run` の公開ポート |
+
+`HOST` と `PORT` は、アプリ本体とデプロイ workflow の両方で参照するため混合扱いにする。`APP_HEALTHCHECK_URL` は `PORT` から組み立てられるので不要。`DOCKER_IMAGE_NAME` と `DOCKER_CONTAINER_NAME` も固定値で十分なため不要。
 
 SMTP接続先は現在の実装で`smtp.gmail.com:465`、TLS有効に固定する。Googleアカウントの通常パスワードは使用しない。
-
-## 10. GitHub Secrets と Variables
-
-GitHub Actionsでは、`deploy.yml` で使う値を `Secrets` と `Variables` に分ける。
-本番では `.env.prod` を読み取らず、workflow内で `docker run` の引数として明示的に渡す。
-
-### Secrets
-
-| Key | ダミー値の例 |
-| --- | --- |
-| `CLOUDFLARED_TOKEN` | `eyJhIjoiZHVtbXktdHVubmVsLXRva2VuIn0=` |
-| `TURNSTILE_SECRET_KEY` | `1x0000000000000000000000000000000AA` |
-| `SMTP_USER` | `sender@example.com` |
-| `SMTP_APP_PASSWORD` | `dummy-app-password-123456` |
-| `CONTACT_TO_EMAIL` | `office@example.com` |
-
-### Variables
-
-| Key | ダミー値の例 |
-| --- | --- |
-| `HOST` | `0.0.0.0` |
-| `PORT` | `3000` |
-| `STATIC_ROOT` | `public` |
-| `TURNSTILE_SITE_KEY` | `1x00000000000000000000AA` |
-| `TURNSTILE_EXPECTED_HOSTNAME` | `yokohama-kannai-sr.com` |
-| `DOCKER_IMAGE_NAME` | `ghcr.io/example/kannai-sr` |
-| `DOCKER_CONTAINER_NAME` | `kannai-sr` |
-| `APP_HEALTHCHECK_URL` | `http://127.0.0.1:3000/healthz` |
-
-`TURNSTILE_SITE_KEY` は公開値だが、workflow から渡しやすいなら `Variables` に置く。`HOST` と `PORT` は運用パラメータなので `Variables` に置く。`STATIC_ROOT` は通常 `public` を指すだけなので `Variables` でよい。`APP_HEALTHCHECK_URL` は `docker run` 後の疎通確認に使うURLで、必要なら `http://127.0.0.1:3000/healthz` のように置く。
 
 ## 11. CI/CD
 
@@ -471,5 +435,4 @@ push to main
 
 ## 15. 未確定事項
 
-- `cloudflared` をホストサービスにするか別コンテナにするか
 - `deploy.yml` での `docker run` 引数の最終形

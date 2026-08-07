@@ -14,12 +14,9 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     env:
-      IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME }}
-      CONTAINER_NAME: ${{ vars.DOCKER_CONTAINER_NAME }}
-      HEALTHCHECK_URL: ${{ vars.APP_HEALTHCHECK_URL }}
       HOST: ${{ vars.HOST }}
       PORT: ${{ vars.PORT }}
       STATIC_ROOT: ${{ vars.STATIC_ROOT }}
@@ -92,7 +89,7 @@ jobs:
 
           # 本番用イメージをローカルホスト上で作成する
           echo "## Docker image build"
-          docker build -f Dockerfile.prod -t "${IMAGE_NAME}:${GITHUB_SHA}" .
+          docker build -f Dockerfile.prod -t "kannal-sr:${GITHUB_SHA}" .
 
       - name: 既存コンテナを停止する
         run: |
@@ -100,14 +97,14 @@ jobs:
 
           # 先に旧コンテナを止めて、同じポートで新コンテナを起動できるようにする
           echo "## Stop old container"
-          if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
-            if [ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}")" = "true" ]; then
-              docker stop "${CONTAINER_NAME}"
+          if docker inspect "kannal-sr" >/dev/null 2>&1; then
+            if [ "$(docker inspect -f '{{.State.Running}}' "kannal-sr")" = "true" ]; then
+              docker stop "kannal-sr"
             else
-              echo "container already stopped: ${CONTAINER_NAME}"
+              echo "container already stopped: kannal-sr"
             fi
           else
-            echo "no existing container: ${CONTAINER_NAME}"
+            echo "no existing container: kannal-sr"
           fi
 
       - name: 既存コンテナを削除する
@@ -116,10 +113,10 @@ jobs:
 
           # 固定名を空けて、新しいコンテナに切り替える
           echo "## Remove old container"
-          if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
-            docker rm "${CONTAINER_NAME}"
+          if docker inspect "kannal-sr" >/dev/null 2>&1; then
+            docker rm "kannal-sr"
           else
-            echo "no container to remove: ${CONTAINER_NAME}"
+            echo "no container to remove: kannal-sr"
           fi
 
       - name: 新しいコンテナを起動する
@@ -129,7 +126,7 @@ jobs:
           # GitHub Secrets / Variables をそのまま docker run の引数へ渡す
           echo "## Docker run"
           docker run -d \
-            --name "${CONTAINER_NAME}" \
+            --name "kannal-sr" \
             --restart unless-stopped \
             -p "127.0.0.1:${PORT}:${PORT}" \
             -e HOST="${HOST}" \
@@ -141,7 +138,7 @@ jobs:
             -e SMTP_USER="${SMTP_USER}" \
             -e SMTP_APP_PASSWORD="${SMTP_APP_PASSWORD}" \
             -e CONTACT_TO_EMAIL="${CONTACT_TO_EMAIL}" \
-            "${IMAGE_NAME}:${GITHUB_SHA}"
+            "kannal-sr:${GITHUB_SHA}"
 
       - name: ヘルスチェックする
         run: |
@@ -150,10 +147,12 @@ jobs:
           # 起動直後の疎通を確認する
           echo "## Smoke test"
           node --input-type=module <<'EOF'
-          const url = process.env.HEALTHCHECK_URL
-          if (!url) {
-            throw new Error("HEALTHCHECK_URL is required")
+          const port = process.env.PORT
+          if (!port) {
+            throw new Error("PORT is required")
           }
+
+          const url = `http://127.0.0.1:${port}/healthz`
 
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -181,6 +180,6 @@ jobs:
           set -euo pipefail
 
           # 失敗時に原因を追いやすいよう、コンテナログを出力する
-          if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
-            docker logs "${CONTAINER_NAME}" || true
+          if docker inspect "kannal-sr" >/dev/null 2>&1; then
+            docker logs "kannal-sr" || true
           fi
